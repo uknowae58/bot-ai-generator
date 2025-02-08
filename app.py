@@ -1,28 +1,75 @@
-from datetime import datetime
-from flask import Flask, render_template, request,jsonify,redirect,session
-import firebase_admin
-from firebase_admin import credentials
-from firebase_admin import firestore, storage
-from firebase_admin import auth
-import secrets
-from datetime import datetime
-import json
+from flask import Flask, request, jsonify
 import requests
+import os
+import replicate
+from dotenv import load_dotenv
 
-logistx_cred = credentials.Certificate("")
-logistx = firebase_admin.initialize_app(logistx_cred,{'storageBucket': 'logistx-7b788.appspot.com'})
-db= firestore.client(logistx)
+# Load environment variables
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = secrets.token_hex(16)
 
+# Configuration
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+REPLICATE_API_TOKEN = os.getenv('REPLICATE_API_TOKEN')
+BASE_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
-@app.route('/', methods=['GET', 'POST'])
-def home():
-    
-    return render_template('home.html')
+def send_message(chat_id, text):
+    """Send message to Telegram"""
+    try:
+        url = f'{BASE_URL}/sendMessage'
+        payload = {
+            'chat_id': chat_id,
+            'text': text
+        }
+        response = requests.post(url, json=payload)
+        return response
+    except Exception as e:
+        print(f"Error sending message: {e}")
+        return None
 
+@app.route('/')
+def index():
+    return 'Processor is running!'
 
+@app.route('/process', methods=['POST'])
+def process_task():
+    """Process AI tasks"""
+    try:
+        data = request.get_json(force=True)
+        chat_id = data['chat_id']
+        prompt = data['prompt']
+        
+        # Get AI response
+        response = replicate.run(
+            "deepseek-ai/deepseek-math-7b-instruct:8328993709e75f2e6417d9ac24a1330961545f6d05d1ab13cdfdd21c00cb1a6e",
+            input={
+                "text": prompt,
+                "max_new_tokens": 500,
+                "temperature": 0.7,
+                "top_p": 0.9
+            }
+        )
+        
+        # Process response
+        if isinstance(response, (list, tuple)):
+            final_response = ''.join(str(x) for x in response)
+        else:
+            final_response = str(response)
+            
+        # Send response back to user
+        if final_response.strip():
+            send_message(chat_id, final_response.strip())
+        else:
+            send_message(chat_id, "Désolé, je n'ai pas pu générer une réponse.")
+            
+        return jsonify({'status': 'ok'})
+        
+    except Exception as e:
+        print(f"Error processing task: {e}")
+        if chat_id:
+            send_message(chat_id, "Désolé, une erreur s'est produite lors du traitement de votre demande.")
+        return jsonify({'status': 'error', 'message': str(e)})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(port=5001, debug=True)
